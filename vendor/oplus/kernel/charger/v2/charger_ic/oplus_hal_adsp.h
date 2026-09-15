@@ -402,6 +402,7 @@ enum usb_property_id {
 	USB_SET_WIRED_USB_STATUS,
 	/* PD partner SVID (lower 16 bits valid) */
 	USB_ADAPTER_SVID,
+	USB_PD_SEND_GET_SINK_CAP,
 #endif /*OPLUS_FEATURE_CHG_BASIC*/
 	USB_PROP_MAX,
 };
@@ -695,6 +696,13 @@ struct gauge_track_cali_info_s {
 };
 #endif
 
+#define AICL_POINT_INDEX_MAX 4
+struct aicl_threshold {
+	int vbat_thr;
+	int hw_aicl;
+	int sw_aicl;
+};
+
 struct battery_chg_dev {
 	struct device			*dev;
 #ifdef OPLUS_FEATURE_CHG_BASIC
@@ -926,6 +934,8 @@ struct battery_chg_dev {
 	int mos_retry_cnt;
 	atomic_t is_shaft_btb_over;
 	bool adsp_reboot_discnt_chg_support;
+	struct aicl_threshold aicl_thr_table[AICL_POINT_INDEX_MAX];
+	bool aicl_thr_table_init;
 };
 
 /**********************************************************************

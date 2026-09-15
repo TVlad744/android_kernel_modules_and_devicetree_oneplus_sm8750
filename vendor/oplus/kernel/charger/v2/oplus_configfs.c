@@ -4761,38 +4761,6 @@ static ssize_t boost_disable_auto_mode_store(struct device *dev, struct device_a
 }
 static DEVICE_ATTR_WO(boost_disable_auto_mode);
 
-static ssize_t update_secondary_smooth_map_store(struct device *dev, struct device_attribute *attr,
-					const char *buf, size_t count)
-{
-	struct oplus_configfs_device *chip = dev->driver_data;
-	int val = 0;
-	int rc = 0;
-
-	if (!chip || !is_comm_topic_available(chip)) {
-		chg_err("chip or common topic is NULL\n");
-		return -EINVAL;
-	}
-
-	if (kstrtos32(buf, 0, &val)) {
-		chg_err("buf error\n");
-		return -EINVAL;
-	}
-
-	if (val != 0 && val != 1) {
-		chg_err("invalid value: %d, expected 0 or 1\n", val);
-		return -EINVAL;
-	}
-
-	rc = oplus_comm_smooth_strategy_rus_set_secondary_smooth_map(chip->comm_topic, !!val);
-	if (rc < 0)
-		chg_err("update failed\n");
-	else
-		chg_info("update succeeded\n");
-
-	return count;
-}
-static DEVICE_ATTR_WO(update_secondary_smooth_map);
-
 static struct device_attribute *oplus_common_attributes[] = {
 	&dev_attr_common,
 	&dev_attr_boot_completed,
@@ -4825,7 +4793,6 @@ static struct device_attribute *oplus_common_attributes[] = {
 	&dev_attr_boost_cv,
 	&dev_attr_vbat_pwr,
 	&dev_attr_boost_disable_auto_mode,
-	&dev_attr_update_secondary_smooth_map,
 	NULL
 };
 
