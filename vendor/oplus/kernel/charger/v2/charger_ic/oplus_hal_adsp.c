@@ -5658,6 +5658,31 @@ static int oplus_supplementary_power_mos_init(struct battery_chg_dev *bcdev)
 	return 0;
 }
 
+static void oplus_parse_aicl_thr_table(struct battery_chg_dev *bcdev, struct device_node *node)
+{
+	int rc = 0;
+
+	bcdev->aicl_thr_table_init = false;
+	rc = of_property_count_elems_of_size(node, "oplus,aicl_thr_table", sizeof(u32));
+	if (rc >= 0) {
+		int length = rc;
+
+		if (length == AICL_POINT_INDEX_MAX * 3) {
+			rc = of_property_read_u32_array(node, "oplus,aicl_thr_table",
+				(u32 *)bcdev->aicl_thr_table, length);
+			if (rc < 0) {
+				chg_err("read %s failed, rc=%d\n", "oplus,aicl_thr_table", rc);
+			} else {
+				bcdev->aicl_thr_table_init = true;
+				chg_err("aicl_thr_table loaded from DT\n");
+			}
+		} else {
+			chg_err("Count %s invalid, rc=%d (expect %d)\n",
+				"oplus,aicl_thr_table", rc, AICL_POINT_INDEX_MAX * 3);
+		}
+	}
+}
+
 static int oplus_chg_parse_custom_dt(struct battery_chg_dev *bcdev)
 {
 	int rc = 0;
@@ -5799,6 +5824,7 @@ static int oplus_chg_parse_custom_dt(struct battery_chg_dev *bcdev)
 	bcdev->adsp_reboot_discnt_chg_support = of_property_read_bool(node, "oplus,adsp_reboot_discnt_chg_support");
 	chg_info("adsp_reboot_discnt_chg_support:%d\n", bcdev->adsp_reboot_discnt_chg_support);
 
+	oplus_parse_aicl_thr_table(bcdev, node);
 	return 0;
 }
 #endif /*OPLUS_FEATURE_CHG_BASIC*/
@@ -8045,6 +8071,18 @@ static int oplus_chg_usb_set_input_current(struct battery_chg_dev *bcdev, int cu
 	return rc;
 }
 
+static int oplus_chg_get_aicl_thr_index(struct battery_chg_dev *bcdev, int vbatt)
+{
+	int index = 0;
+	for (index = 0; index < AICL_POINT_INDEX_MAX; index++) {
+		if (vbatt <= bcdev->aicl_thr_table[index].vbat_thr)
+			break;
+	}
+	if (index >= AICL_POINT_INDEX_MAX - 1)
+		index = AICL_POINT_INDEX_MAX - 1;
+	return index;
+}
+
 #define UNKONW_CURR 500
 #define DEFAULT_CURR_BY_CC 100
 static int oplus_chg_set_input_current(struct battery_chg_dev *bcdev, int current_ma)
@@ -8059,6 +8097,7 @@ static int oplus_chg_set_input_current(struct battery_chg_dev *bcdev, int curren
 	int max_pdo_current;
 	int batt_volt;
 	int type = 0;
+	int aicl_thr_index = 0;
 
 	prop_id = get_property_id(pst, POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT);
 
@@ -8070,10 +8109,15 @@ static int oplus_chg_set_input_current(struct battery_chg_dev *bcdev, int curren
 		oplus_mms_get_item_data(gauge_topic,
 					GAUGE_ITEM_VOL_MAX, &data, false);
 		batt_volt = data.intval;
-		if (batt_volt > 4100) {
-			aicl_point = 4550;
+		if (bcdev->aicl_thr_table_init) {
+			aicl_thr_index = oplus_chg_get_aicl_thr_index(bcdev, batt_volt);
+			aicl_point = bcdev->aicl_thr_table[aicl_thr_index].sw_aicl;
 		} else {
-			aicl_point = 4500;
+			if (batt_volt > 4100) {
+				aicl_point = 4550;
+			} else {
+				aicl_point = 4500;
+			}
 		}
 	} else {
 		chg_info("gauge_topic is null, use default aicl_point 4500\n");
@@ -10419,6 +10463,7 @@ static int oplus_chg_set_aicl_point(struct oplus_chg_ic_dev *ic_dev, int vbatt)
 	int curr_aicl = 0;
 	int type = 0;
 	bool present = false;
+	int aicl_thr_index = 0;
 
 	if (ic_dev == NULL) {
 		chg_err("oplus_chg_ic_dev is NULL");
@@ -10429,10 +10474,15 @@ static int oplus_chg_set_aicl_point(struct oplus_chg_ic_dev *ic_dev, int vbatt)
 	if (!bcdev || !bcdev->usb_aicl_enhance)
 		return 0;
 
-	if (vbatt > AICL_POINT_VOL_5V)
-		hw_aicl_point = HW_AICL_POINT_VOL_5V_PHASE2;
-	else if (vbatt <= AICL_POINT_VOL_5V)
-		hw_aicl_point = HW_AICL_POINT_VOL_5V_PHASE1;
+	if (bcdev->aicl_thr_table_init) {
+		aicl_thr_index = oplus_chg_get_aicl_thr_index(bcdev, vbatt);
+		hw_aicl_point = bcdev->aicl_thr_table[aicl_thr_index].hw_aicl;
+	} else {
+		if (vbatt > AICL_POINT_VOL_5V)
+			hw_aicl_point = HW_AICL_POINT_VOL_5V_PHASE2;
+		else if (vbatt <= AICL_POINT_VOL_5V)
+			hw_aicl_point = HW_AICL_POINT_VOL_5V_PHASE1;
+	}
 
 	oplus_chg_8350_input_present(bcdev->buck_ic, &present);
 	oplus_chg_8350_get_charger_type(bcdev->buck_ic, &type);
@@ -10732,11 +10782,6 @@ static int oplus_chg_get_vdm_info(struct oplus_chg_ic_dev *ic_dev, u32 *data, in
 	}
 
 	bcdev = oplus_chg_ic_get_drvdata(ic_dev);
-	if (!bcdev) {
-		chg_err("bcdev is NULL");
-		return -ENODEV;
-	}
-
 	if (data == NULL || cnt == NULL) {
 		chg_err("data or cnt is NULL");
 		return -EINVAL;
@@ -10754,6 +10799,50 @@ static int oplus_chg_get_vdm_info(struct oplus_chg_ic_dev *ic_dev, u32 *data, in
 
 	return 0;
 }
+
+static int oplus_send_get_sink_cap(struct battery_chg_dev *bcdev)
+{
+	struct psy_state *pst = NULL;
+	int rc = 0;
+	pst = &bcdev->psy_list[PSY_TYPE_USB];
+
+	if (bcdev->soccp_support) {
+		rc = write_property_id(bcdev, &bcdev->oplus_psy, OPLUS_SET_PD_SINK_CAP, true);
+	} else {
+		rc = write_property_id(bcdev, pst, USB_PD_SEND_GET_SINK_CAP, true);
+	}
+	if (rc)
+		chg_err("adsp send get_sink_cap failed, rc=%d\n", rc);
+
+	return rc;
+}
+
+static int oplus_chg_send_get_sink_cap(struct oplus_chg_ic_dev *ic_dev)
+{
+	struct battery_chg_dev *bcdev;
+	int rc = 0;
+
+	if (ic_dev == NULL) {
+		chg_err("ic_dev is NULL");
+		return -ENODEV;
+	}
+
+	bcdev = oplus_chg_ic_get_drvdata(ic_dev);
+
+	if (bcdev == NULL) {
+		chg_err("bcdev is NULL");
+		return -ENODEV;
+	}
+
+	if (!bcdev->otg_online) {
+		chg_err("not source, skip");
+		return -EINVAL;
+	}
+
+	rc = oplus_send_get_sink_cap(bcdev);
+	return rc;
+}
+
 static void *oplus_chg_8350_buck_get_func(struct oplus_chg_ic_dev *ic_dev, enum oplus_chg_ic_func func_id)
 {
 	void *func = NULL;
@@ -11004,6 +11093,9 @@ static void *oplus_chg_8350_buck_get_func(struct oplus_chg_ic_dev *ic_dev, enum 
 		break;
 	case OPLUS_IC_FUNC_BUCK_GET_VDM_INFO:
 		func = OPLUS_CHG_IC_FUNC_CHECK(OPLUS_IC_FUNC_BUCK_GET_VDM_INFO, oplus_chg_get_vdm_info);
+		break;
+	case OPLUS_IC_FUNC_BUCK_SEND_GET_SINK_CAP:
+		func = OPLUS_CHG_IC_FUNC_CHECK(OPLUS_IC_FUNC_BUCK_SEND_GET_SINK_CAP, oplus_chg_send_get_sink_cap);
 		break;
 	default:
 		chg_err("this func(=%d) is not supported\n", func_id);
